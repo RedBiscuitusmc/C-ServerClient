@@ -1,0 +1,196 @@
+using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace SerClient
+{
+    public class Server
+    {
+        private bool isServerRunning = true;
+        private List<Socket> connectedClients = new List<Socket>();
+        private Dictionary<Socket, string> clientStatuses = new Dictionary<Socket, string>();
+
+
+        public async Task StartServerAsync()
+        {
+            int delayTime = 1000;
+            Console.WriteLine("Starting the server...");
+
+            var localhost = "127.0.0.1";
+            var port = 3000;
+
+            await Task.Delay(delayTime);
+            Console.WriteLine($"Server attempting to bind to {localhost}:{port}...");
+
+            await Task.Delay(delayTime);
+            IPHostEntry ipEntry = await Dns.GetHostEntryAsync(localhost);
+            IPAddress ip = ipEntry.AddressList[0];
+            IPEndPoint iPEndPoint = new IPEndPoint(ip, port);
+
+            await Task.Delay(delayTime);
+            using Socket serverSocket = CreateServerSocket(iPEndPoint);
+
+            await Task.Delay(delayTime);
+            Console.WriteLine($"Server Started Listening on port {port}");
+
+            await Listen(serverSocket); // Change here
+
+            Console.WriteLine("Server is shutting down.");
+        }
+
+        private Socket CreateServerSocket(IPEndPoint iPEndPoint)
+        {
+            Console.WriteLine("Creating server socket...");
+            var server = new Socket(
+                iPEndPoint.AddressFamily,
+                SocketType.Stream,
+                ProtocolType.Tcp
+            );
+
+            // Set the ReuseAddress option to avoid "Address already in use" issues
+            server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+
+            server.Bind(iPEndPoint);
+            server.Listen(10);
+            return server;
+        }
+
+        private async Task Listen(Socket serverSocket)
+        {
+            var ServerOnline = "Server status is healthy, server is ready to accept connections";
+            try
+            {
+                Console.WriteLine($"Server is now ready to accept connections on {serverSocket.LocalEndPoint}.");
+                Console.WriteLine(ServerOnline);
+
+                while (isServerRunning)
+                {
+                    Socket clientSocket = await serverSocket.AcceptAsync();
+                    Console.WriteLine($"Accepted connection from {clientSocket.RemoteEndPoint}");
+
+                    _ = HandleClientConnection(clientSocket);
+                    CheckConnectionStatus();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in Listen method: {ex.Message}");
+                // Additional error handling as needed
+            }
+        }
+        private async Task HandleClientConnection(Socket clientSocket)
+        {
+            Console.WriteLine($"Handling client connection from {clientSocket.RemoteEndPoint}");
+
+            try
+            {
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+
+                // Loop for receiving messages from client
+                while ((bytesRead = await clientSocket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None)) > 0)
+                {
+                    string receivedMessage = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+                    Console.WriteLine($"Received message from client: {receivedMessage}");
+
+                    // Update client status
+                    lock (clientStatuses)
+                    {
+                        clientStatuses[clientSocket] = receivedMessage;
+                    }
+
+                    // Example: Send a response
+                    string responseData = "Hello, Client!";
+                    byte[] responseBuffer = Encoding.UTF8.GetBytes(responseData);
+                    await clientSocket.SendAsync(new ArraySegment<byte>(responseBuffer), SocketFlags.None);
+                }
+            }
+            catch (SocketException ex)
+            {
+                Console.WriteLine($"Client {clientSocket.RemoteEndPoint} disconnected: {ex.Message}");
+                // Reset the socket here if needed
+            }
+            finally
+            {
+                // Clean up resources
+                if (clientSocket.Connected)
+                {
+                    clientSocket.Shutdown(SocketShutdown.Both);
+                }
+                clientSocket.Close();
+                Console.WriteLine($"Connection with client {clientSocket.RemoteEndPoint} has been reset.");
+                // You can add socket reset logic here if necessary
+            }
+        }
+
+
+        public void DisplayAllConnections()
+        {
+            if (connectedClients.Count == 0)
+            {
+                Console.WriteLine("No clients are currently connected.");
+                return;
+            }
+
+            Console.WriteLine("Displaying all connected clients:");
+            foreach (var client in connectedClients)
+            {
+                string clientStatus = IsClientConnected(client) ? "Connected" : "Disconnected";
+                Console.WriteLine($"Client {client.RemoteEndPoint}: Status - {clientStatus}");
+            }
+        }
+
+        private void CheckConnectionStatus()
+        {
+            Console.WriteLine("Initiating check of server and client connection statuses...");
+
+            if (!isServerRunning)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("Server is currently not running.");
+                Console.ResetColor();
+                return;
+            }
+
+            Console.WriteLine("Server is running. Proceeding to check connected clients...");
+
+            foreach (var client in connectedClients)
+            {
+                Console.WriteLine($"Checking connection status for client at {client.RemoteEndPoint}...");
+                if (IsClientConnected(client))
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"Client at {client.RemoteEndPoint} is connected and stable.");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($"Client at {client.RemoteEndPoint} is disconnected or unstable.");
+                    Console.ResetColor();
+                }
+            }
+
+            Console.WriteLine("Finished checking connection statuses of all connected clients.");
+        }
+
+        private bool IsClientConnected(Socket client)
+        {
+            try
+            {
+                bool isSocketConnected = !(client.Poll(1, SelectMode.SelectRead) && client.Available == 0);
+                Console.WriteLine($"Socket check for client at {client.RemoteEndPoint}: " + (isSocketConnected ? "Connected" : "Disconnected or Unstable"));
+                return isSocketConnected;
+            }
+            catch (SocketException ex)
+            {
+                Console.WriteLine($"Error checking socket for client at {client.RemoteEndPoint}: {ex.Message}");
+                return false;
+            }
+        }
+
+    }
+}
